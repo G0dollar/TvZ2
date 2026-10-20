@@ -96,30 +96,34 @@ let runGathered = {
 
 // ── Persistent state (saved to localStorage, survives across runs) ──
 const SAVE_KEY = 'tvz2_save_v8'; // v8: added tech class + deployables
-let persistent = {
-  // Basic scrap — now accumulates across runs
-  iron: 0, steel: 0, titan: 0,
-  // Standard game boss/miniboss drops
-  metalCore: 0,
-  // Class shard currencies (from raid regular zombies)
-  fireShard: 0, stormShard: 0, cryoShard: 0, voidShard: 0, techShard: 0,
-  // Per-class broken cores (from raid MINIBOSS) — 3 = unlock that class
-  fireCoreBroken: 0, stormCoreBroken: 0, cryoCoreBroken: 0, voidCoreBroken: 0, techCoreBroken: 0,
-  // Per-class full cores (from raid BOSS) — 1 = unlock that class
-  fireCore: 0, stormCore: 0, cryoCore: 0, voidCore: 0, techCore: 0,
-  // Persistent upgrade levels
-  ugLvls: [0, 0, 0, 0, 0, 0],
-  classLvls: { fire: 0, storm: 0, cryo: 0, void: 0, tech: 0 },
-  // Explicitly unlocked classes (cores spent) — gates class powers in raids
-  unlockedClasses: [],
-  // Chosen class for standard battle (null = none)
-  activeClass: null,
-  // Wave check points
-  savedWave: 1,
-  savedRaidWaves: { fire: 1, storm: 1, cryo: 1, void: 1, tech: 1 },
-  // Endless personal record
-  endlessBestWave: 0
-};
+function createInitialPersistentState() {
+  return {
+    // Basic scrap — now accumulates across runs
+    iron: 0, steel: 0, titan: 0,
+    // Standard game boss/miniboss drops
+    metalCore: 0,
+    // Class shard currencies (from raid regular zombies)
+    fireShard: 0, stormShard: 0, cryoShard: 0, voidShard: 0, techShard: 0,
+    // Per-class broken cores (from raid MINIBOSS) — 3 = unlock that class
+    fireCoreBroken: 0, stormCoreBroken: 0, cryoCoreBroken: 0, voidCoreBroken: 0, techCoreBroken: 0,
+    // Per-class full cores (from raid BOSS) — 1 = unlock that class
+    fireCore: 0, stormCore: 0, cryoCore: 0, voidCore: 0, techCore: 0,
+    // Persistent upgrade levels
+    ugLvls: [0, 0, 0, 0, 0, 0],
+    classLvls: { fire: 0, storm: 0, cryo: 0, void: 0, tech: 0 },
+    // Explicitly unlocked classes (cores spent) — gates class powers in raids
+    unlockedClasses: [],
+    // Chosen class for standard battle (null = none)
+    activeClass: null,
+    // Wave check points
+    savedWave: 1,
+    savedRaidWaves: { fire: 1, storm: 1, cryo: 1, void: 1, tech: 1 },
+    // Endless personal record
+    endlessBestWave: 0
+  };
+}
+
+let persistent = createInitialPersistentState();
 
 // Deployables State
 let deployables = [];
@@ -3393,6 +3397,10 @@ function openSettings() {
     closeBtn.textContent = gameMode === 'menu' ? '← BACK TO MENU' : '← BACK TO BATTLE';
   }
 
+  refreshSettingsUI();
+}
+
+function refreshSettingsUI() {
   document.getElementById("sfxToggle").checked = sfxEnabled;
   document.getElementById("sfxVolumeSlider").value = sfxVolume;
   document.getElementById("sfxVolVal").textContent = Math.round(sfxVolume * 100) + "%";
@@ -3402,6 +3410,39 @@ function openSettings() {
   document.getElementById("musicVolVal").textContent = Math.round(musicVolume * 100) + "%";
 
   setControlsMode(controlsMode);
+}
+
+function wipeSave() {
+  if (!window.confirm("Wipe all saved game progress? This cannot be undone.")) return;
+
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch (error) {
+    console.error("Unable to wipe saved game progress:", error);
+    showDropToast("Could not wipe save data.");
+    return;
+  }
+
+  persistent = createInitialPersistentState();
+  scrap.iron = 0;
+  scrap.steel = 0;
+  scrap.titan = 0;
+  UG.forEach((upgrade, i) => { upgrade.lvl = persistent.ugLvls[i] || 0; });
+  if (gameMode === 'menu') {
+    activeClass = null;
+    updateClassBadge();
+  }
+
+  updateMainMenuResources();
+  refreshSettingsUI();
+  showDropToast("Save data wiped.");
+}
+
+function showDropToast(message) {
+  const toast = document.getElementById("dropToast");
+  toast.textContent = message;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
 function closeSettings() {
@@ -3554,6 +3595,7 @@ document.addEventListener('keydown', e => {
 //  MAIN MENU & MODE NAVIGATION
 // ══════════════════════════════════════════════
 function showMainMenu() {
+  const previousGameMode = gameMode;
   gameMode = 'menu';
   running = false;
   over = false;
@@ -3561,7 +3603,7 @@ function showMainMenu() {
   paused = false;
   // If returning from a raid, clear the raid-assigned class.
   // Standard battle class (set in shop) is preserved in persistent.activeClass.
-  if (gameMode === 'raid') {
+  if (previousGameMode === 'raid') {
     activeClass = persistent.activeClass; // restore standard class if any
   }
   updateBoardBorder();
