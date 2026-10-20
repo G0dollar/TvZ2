@@ -67,6 +67,7 @@
       width: 100%;
       max-width: 500px;
       height: 100vh;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -465,7 +466,7 @@
     #boardWrapper {
       position: relative;
       flex: 1;
-      min-height: 250px;
+      min-height: 0;
       width: 100%;
       display: flex;
       align-items: center;
@@ -474,8 +475,10 @@
 
     #board {
       display: block;
-      width: 90%;
       height: 96%;
+      width: auto;
+      max-width: 90%;
+      aspect-ratio: 1 / 2;
       background: linear-gradient(135deg, #0e0e0e, #181818);
       border-radius: 10px;
       border: 2px solid #2a2a2a;
@@ -504,29 +507,29 @@
       animation: boardGlow 4s ease-in-out infinite alternate;
     }
 
-    #board.boss-mode {
-      border-color: #ff2200 !important;
-      box-shadow: 0 0 30px rgba(255, 30, 0, 0.6), inset 0 0 18px rgba(160, 0, 0, 0.2) !important;
-    }
-
     #board.fire-mode {
-      border-color: #ff6d00 !important;
-      box-shadow: 0 0 20px rgba(255, 109, 0, 0.4), inset 0 0 12px rgba(180, 50, 0, 0.15) !important;
+      border-color: #ff6d00;
+      box-shadow: 0 0 20px rgba(255, 109, 0, 0.4), inset 0 0 12px rgba(180, 50, 0, 0.15);
     }
 
     #board.storm-mode {
-      border-color: #aeea00 !important;
-      box-shadow: 0 0 20px rgba(174, 234, 0, 0.35), inset 0 0 12px rgba(100, 180, 0, 0.12) !important;
+      border-color: #aeea00;
+      box-shadow: 0 0 20px rgba(174, 234, 0, 0.35), inset 0 0 12px rgba(100, 180, 0, 0.12);
     }
 
     #board.cryo-mode {
-      border-color: #80deea !important;
-      box-shadow: 0 0 20px rgba(128, 222, 234, 0.35), inset 0 0 12px rgba(0, 150, 160, 0.12) !important;
+      border-color: #80deea;
+      box-shadow: 0 0 20px rgba(128, 222, 234, 0.35), inset 0 0 12px rgba(0, 150, 160, 0.12);
     }
 
     #board.void-mode {
-      border-color: #ce93d8 !important;
-      box-shadow: 0 0 20px rgba(206, 147, 216, 0.35), inset 0 0 12px rgba(120, 0, 160, 0.12) !important;
+      border-color: #ce93d8;
+      box-shadow: 0 0 20px rgba(206, 147, 216, 0.35), inset 0 0 12px rgba(120, 0, 160, 0.12);
+    }
+
+    #board.boss-mode {
+      border-color: #ff2200;
+      box-shadow: 0 0 30px rgba(255, 30, 0, 0.6), inset 0 0 18px rgba(160, 0, 0, 0.2);
     }
 
     .shake {
@@ -760,7 +763,7 @@
       display: none;
       justify-content: center;
       align-items: center;
-      z-index: 200;
+      z-index: 400;
       backdrop-filter: blur(12px) saturate(160%) !important;
       -webkit-backdrop-filter: blur(12px) saturate(160%) !important;
     }
@@ -2143,18 +2146,6 @@
         <!-- Canvas Game Grid (500x1000 logical resolution scaled dynamically) -->
         <canvas id="gameCanvas" width="500" height="1000"></canvas>
       </div>
-      <div id="gameOver" class="overlay">
-        <div class="panel" style="text-align:center;">
-          <h2>GAME OVER</h2>
-          <p id="finalScore" style="font-size:15px;margin:16px 0;line-height:1.9;"></p>
-          <button onclick="resetGame()"
-            style="width:100%;height:50px;background:linear-gradient(135deg,white,#eee);color:black;font-size:15px;margin-top:8px;font-family:var(--font);">🔄
-            PLAY AGAIN</button>
-          <button onclick="goToMainMenu()"
-            style="width:100%;height:40px;background:linear-gradient(135deg,#1a1a2e,#0f0f1a);color:#aaa;font-size:13px;margin-top:6px;border:1px solid #333;font-family:var(--font);">🏠
-            MAIN MENU</button>
-        </div>
-      </div>
     </div>
     <div id="controls">
       <button onclick="move(-1)">◀</button>
@@ -2163,6 +2154,19 @@
       <button onclick="reload()">⟳</button>
       <button onclick="toggleUtility()" style="background:linear-gradient(135deg,#3c3c44,#222);border-color:#555;font-size:12px;">🔄</button>
       <button id="mobilePlaceBtn" onclick="deployActiveUtility()" style="background:linear-gradient(135deg,#005c66,#002c33);border-color:#00e5ff;font-size:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;"></button>
+    </div>
+  </div>
+
+  <div id="gameOver" class="overlay">
+    <div class="panel" style="text-align:center;">
+      <h2>GAME OVER</h2>
+      <p id="finalScore" style="font-size:15px;margin:16px 0;line-height:1.9;"></p>
+      <button onclick="resetGame()"
+        style="width:100%;height:50px;background:linear-gradient(135deg,white,#eee);color:black;font-size:15px;margin-top:8px;font-family:var(--font);">🔄
+        PLAY AGAIN</button>
+      <button onclick="goToMainMenu()"
+        style="width:100%;height:40px;background:linear-gradient(135deg,#1a1a2e,#0f0f1a);color:#aaa;font-size:13px;margin-top:6px;border:1px solid #333;font-family:var(--font);">🏠
+        MAIN MENU</button>
     </div>
   </div>
 
