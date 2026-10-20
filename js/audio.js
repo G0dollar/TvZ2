@@ -5,12 +5,55 @@
 // Global Audio States (shared with game settings)
 let sfxEnabled = true;
 let sfxVolume = 0.6;
-let musicVolume = 0;
+let musicVolume = 0.4;
 let musicMuted = true;
 let musicPlaying = false;
 let musicInterval = null;
 let musicStep = 0;
 let currentMusicTheme = 'menu';
+const AUDIO_SETTINGS_KEY = 'tvz2_audio_settings_v1';
+
+function loadAudioSettings() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(AUDIO_SETTINGS_KEY));
+    if (!settings || typeof settings !== 'object') return;
+
+    if (typeof settings.sfxEnabled === 'boolean') sfxEnabled = settings.sfxEnabled;
+    if (Number.isFinite(settings.sfxVolume) && settings.sfxVolume >= 0 && settings.sfxVolume <= 1) {
+      sfxVolume = settings.sfxVolume;
+    }
+    if (typeof settings.musicMuted === 'boolean') musicMuted = settings.musicMuted;
+    if (Number.isFinite(settings.musicVolume) && settings.musicVolume >= 0 && settings.musicVolume <= 1) {
+      musicVolume = settings.musicVolume;
+    }
+    if (!musicMuted && musicVolume === 0) musicVolume = 0.4;
+  } catch (error) {
+    console.error("Unable to load saved audio settings:", error);
+  }
+}
+
+function saveAudioSettings() {
+  try {
+    localStorage.setItem(AUDIO_SETTINGS_KEY, JSON.stringify({
+      sfxEnabled,
+      sfxVolume,
+      musicMuted,
+      musicVolume
+    }));
+  } catch (error) {
+    console.error("Unable to save audio settings:", error);
+  }
+}
+
+function resetAudioSettings() {
+  sfxEnabled = true;
+  sfxVolume = 0.6;
+  musicVolume = 0.4;
+  musicMuted = true;
+  stopMusic();
+}
+
+loadAudioSettings();
 
 const BPM = 125;
 const stepTime = 60 / BPM / 2; // eighth notes (0.24 seconds)
@@ -733,6 +776,7 @@ function toggleSFXSetting() {
     label.textContent = Math.round(sfxVolume * 100) + "%";
     sndScrap();
   }
+  saveAudioSettings();
 }
 
 function updateSFXVolumeSetting(val) {
@@ -750,6 +794,7 @@ function updateSFXVolumeSetting(val) {
     checkbox.checked = false;
     sfxEnabled = false;
   }
+  saveAudioSettings();
 }
 
 function toggleMusicSetting() {
@@ -759,9 +804,7 @@ function toggleMusicSetting() {
   
   musicMuted = !checkbox.checked;
   if (musicMuted) {
-    slider.value = 0;
-    label.textContent = "0%";
-    musicVolume = 0;
+    label.textContent = Math.round(musicVolume * 100) + "%";
     stopMusic();
   } else {
     if (parseFloat(slider.value) === 0) {
@@ -772,6 +815,7 @@ function toggleMusicSetting() {
     if (AC.state === 'suspended') AC.resume();
     startMusic(currentMusicTheme);
   }
+  saveAudioSettings();
 }
 
 function updateMusicVolumeSetting(val) {
@@ -791,4 +835,5 @@ function updateMusicVolumeSetting(val) {
     musicMuted = true;
     stopMusic();
   }
+  saveAudioSettings();
 }

@@ -29,7 +29,7 @@ Touch controls are available on mobile devices. The input mode can also be chang
 
 ## Progress and settings
 
-Game progress is saved in this browser's `localStorage`; it is not synced between browsers or devices. Audio preferences and the selected controls mode are currently kept in memory only and reset when the page reloads. Use **Wipe All Save Data** in Settings to reset saved game progress.
+Game progress and audio preferences are saved in this browser's `localStorage`; they are not synced between browsers or devices. The selected controls mode is kept in memory only and resets when the page reloads. **Wipe All Save Data** in Settings resets both progress and saved audio preferences.
 
 ## Project structure
 

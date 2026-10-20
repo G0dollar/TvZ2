@@ -18,6 +18,9 @@ let running = false;
 let over = false;
 let spawningEnabled = true;
 let paused = false;
+const pauseReasons = new Set();
+let pausedSpawnRemaining = 0;
+let spawningBeforePause = false;
 let bossAlive = false;
 let minibossAlive = false;
 
@@ -61,6 +64,45 @@ function getMaxBurst() {
     b = Math.max(1, b - 1);
   }
   return b;
+}
+
+function pauseGame(reason) {
+  if (pauseReasons.has(reason)) return;
+
+  if (pauseReasons.size === 0) {
+    paused = true;
+    pausedSpawnRemaining = Math.max(0, nextSpawnTime - Date.now());
+    spawningBeforePause = spawningEnabled;
+    if (coolingDown) cooldownPauseAcc += Date.now() - cooldownStart;
+  }
+
+  pauseReasons.add(reason);
+  spawningEnabled = false;
+}
+
+function resumeGame(reason, resetSpawnDelay = true) {
+  if (!pauseReasons.delete(reason) || pauseReasons.size > 0) return;
+
+  paused = false;
+  if (coolingDown) cooldownStart = Date.now();
+  nextSpawnTime = Date.now() + (resetSpawnDelay ? spawnDelay : pausedSpawnRemaining);
+  spawningEnabled = spawningBeforePause;
+  pausedSpawnRemaining = 0;
+}
+
+function clearGamePauses() {
+  pauseReasons.clear();
+  paused = false;
+  pausedSpawnRemaining = 0;
+  spawningBeforePause = false;
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) {
+    if (running) pauseGame('visibility');
+  } else {
+    resumeGame('visibility', false);
+  }
 }
 
 function chooseRandomMutator() {
@@ -446,6 +488,7 @@ function startGame() {
 }
 
 function resetGame() {
+  clearGamePauses();
   stopMusic();
   activeMutator = null;
   const mInd = document.getElementById("mutatorIndicator");
@@ -565,6 +608,7 @@ function resetGame() {
   updateScrapBar();
   updatePersistentBar();
   updateClassBadge();
+  if (document.hidden) pauseGame('visibility');
 }
 
 // Apply all purchased UG effects (called at run start so persistent upgrades take effect)
@@ -3101,9 +3145,7 @@ function updateClassPowerHUD() {
 //  SHOP MANAGER
 // ══════════════════════════════════════════════
 function openShop() {
-  paused = true;
-  spawningEnabled = false;
-  if (coolingDown) cooldownPauseAcc += Date.now() - cooldownStart;
+  pauseGame('shop');
   document.getElementById("upgradeOverlay").style.display = "flex";
   switchTab(currentTab);
 }
@@ -3117,10 +3159,7 @@ function closeShop() {
     showMainMenu();
     return;
   }
-  paused = false;
-  if (!bossAlive && !minibossAlive) spawningEnabled = true;
-  if (coolingDown) cooldownStart = Date.now();
-  nextSpawnTime = Date.now() + spawnDelay;
+  resumeGame('shop');
 }
 
 function switchTab(tab) {
@@ -3385,9 +3424,7 @@ function showClassUpgrades() {
 function openSettings() {
   // Only pause/affect game state when called during active battle
   if (gameMode !== 'menu') {
-    paused = true;
-    spawningEnabled = false;
-    if (coolingDown) cooldownPauseAcc += Date.now() - cooldownStart;
+    pauseGame('settings');
   }
   document.getElementById("settingsOverlay").style.display = "flex";
 
@@ -3417,6 +3454,7 @@ function wipeSave() {
 
   try {
     localStorage.removeItem(SAVE_KEY);
+    localStorage.removeItem(AUDIO_SETTINGS_KEY);
   } catch (error) {
     console.error("Unable to wipe saved game progress:", error);
     showDropToast("Could not wipe save data.");
@@ -3424,6 +3462,7 @@ function wipeSave() {
   }
 
   persistent = createInitialPersistentState();
+  resetAudioSettings();
   scrap.iron = 0;
   scrap.steel = 0;
   scrap.titan = 0;
@@ -3449,18 +3488,13 @@ function closeSettings() {
   document.getElementById("settingsOverlay").style.display = "none";
   // Only resume game state if we're in a battle
   if (gameMode !== 'menu') {
-    paused = false;
-    if (!bossAlive && !minibossAlive) spawningEnabled = true;
-    if (coolingDown) cooldownStart = Date.now();
-    nextSpawnTime = Date.now() + spawnDelay;
+    resumeGame('settings');
   }
 }
 
 function openHowToPlay() {
   if (gameMode !== 'menu') {
-    paused = true;
-    spawningEnabled = false;
-    if (coolingDown) cooldownPauseAcc += Date.now() - cooldownStart;
+    pauseGame('how-to-play');
   }
   document.getElementById("howToPlayOverlay").classList.add("show");
 }
@@ -3468,10 +3502,7 @@ function openHowToPlay() {
 function closeHowToPlay() {
   document.getElementById("howToPlayOverlay").classList.remove("show");
   if (gameMode !== 'menu') {
-    paused = false;
-    if (!bossAlive && !minibossAlive) spawningEnabled = true;
-    if (coolingDown) cooldownStart = Date.now();
-    nextSpawnTime = Date.now() + spawnDelay;
+    resumeGame('how-to-play');
   }
 }
 
@@ -3529,7 +3560,7 @@ function endGame() {
   running = false;
   over = true;
   spawningEnabled = false;
-  paused = false;
+  clearGamePauses();
   document.getElementById("board").className = "";
   document.getElementById("gameOver").style.display = "flex";
 
@@ -3596,11 +3627,11 @@ document.addEventListener('keydown', e => {
 // ══════════════════════════════════════════════
 function showMainMenu() {
   const previousGameMode = gameMode;
+  clearGamePauses();
   gameMode = 'menu';
   running = false;
   over = false;
   spawningEnabled = false;
-  paused = false;
   // If returning from a raid, clear the raid-assigned class.
   // Standard battle class (set in shop) is preserved in persistent.activeClass.
   if (previousGameMode === 'raid') {
@@ -3676,7 +3707,7 @@ function performMainMenuExit() {
   running = false;
   over = false;
   spawningEnabled = false;
-  paused = false;
+  clearGamePauses();
   exitTimerActive = false;
   document.getElementById('exitCountdownIndicator').style.display = 'none';
   zombies = [];
@@ -3690,8 +3721,7 @@ function performMainMenuExit() {
 }
 
 function showExitConfirmation() {
-  paused = true;
-  if (coolingDown) cooldownPauseAcc += Date.now() - cooldownStart;
+  pauseGame('exit-confirm');
   
   const overlay = document.getElementById('exitConfirmOverlay');
   const titleEl = document.getElementById('exitConfirmTitle');
@@ -3721,18 +3751,12 @@ function startExitCountdown() {
   document.getElementById('exitCountdownTime').textContent = '3.0';
 
   // Resume game for the countdown duration
-  paused = false;
-  if (coolingDown) cooldownStart = Date.now();
-  nextSpawnTime = Date.now() + spawnDelay;
+  resumeGame('exit-confirm');
 }
 
 function cancelExit() {
   document.getElementById('exitConfirmOverlay').style.display = 'none';
-  
-  // Resume game
-  paused = false;
-  if (coolingDown) cooldownStart = Date.now();
-  nextSpawnTime = Date.now() + spawnDelay;
+  resumeGame('exit-confirm');
 }
 
 function resolveRunResources(multiplier, saveWaveProgress) {
@@ -3788,7 +3812,7 @@ function resolveRunResources(multiplier, saveWaveProgress) {
 }
 
 function showCheckpointChoices() {
-  paused = true;
+  pauseGame('checkpoint');
 
   const overlay = document.getElementById('checkpointOverlay');
   const textEl = document.getElementById('checkpointText');
@@ -3829,10 +3853,7 @@ function showCheckpointChoices() {
       runGathered[k] = Math.floor(runGathered[k] * 1.5);
     });
     updateScrapBar();
-    paused = false;
-    if (coolingDown) cooldownStart = Date.now();
-    nextSpawnTime = Date.now() + spawnDelay;
-    spawningEnabled = true;
+    resumeGame('checkpoint');
   };
 
   overlay.style.display = 'flex';
@@ -3840,7 +3861,7 @@ function showCheckpointChoices() {
 
 function openClassManager() {
   // Open the shop on the class tab so user can spend shards from main menu
-  paused = false;
+  clearGamePauses();
   document.getElementById('mainMenu').style.display = 'none';
   // Ensure game state is minimal
   if (!running) {
@@ -4084,6 +4105,8 @@ const gLoop = setInterval(() => {
 window.addEventListener('beforeunload', () => {
   clearInterval(gLoop);
 });
+
+document.addEventListener('visibilitychange', handleVisibilityChange);
 
 // Initialize game
 initGame();
