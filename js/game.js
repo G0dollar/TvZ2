@@ -6,6 +6,7 @@
 let turretCol = 2;
 let bullets = [];
 let zombies = [];
+let alienDeathEffects = [];
 let enemyBullets = [];
 let kills = 0;
 let waveKills = 0;
@@ -34,8 +35,18 @@ let coolingDown = false;
 let cooldownStart = 0;
 let cooldownPauseAcc = 0;
 
-let spawnDelay = 4250;
+const BASE_SPAWN_DELAY = 4250;
+const SPAWN_DELAY_MULTIPLIER = 0.96;
+let spawnDelay = BASE_SPAWN_DELAY;
 let nextSpawnTime = 0;
+const ALIEN_WALK_FRAME_MS = 125;
+const ALIEN_DAMAGE_FRAME_MS = 70;
+const ALIEN_DEATH_FRAME_MS = 110;
+const ALIEN_RENDER_SIZE = 64;
+const alienSprites = {
+  basic: loadAlienSpriteSet('basic'),
+  fast: loadAlienSpriteSet('fast')
+};
 let coinMult = 1;
 let knockback = 0;
 let bossPhase = 1;
@@ -45,6 +56,59 @@ let activeClass = null;
 let classPowers = { fire: {}, storm: {}, cryo: {}, void: {}, tech: {} };
 let currentTab = 'basic';
 let controlsMode = (('ontouchstart' in window) || (navigator.maxTouchPoints > 0)) ? 'mobile' : 'pc';
+
+function loadAlienSpriteSet(type) {
+  const loadFrames = (animation, count) =>
+    Array.from({ length: count }, (_, i) => loadAlienSprite(`${type}/${animation}/${animation}${i + 1}.png`));
+  return {
+    walk: loadFrames('walk', 8),
+    damage: loadFrames('damage', 4),
+    death: loadFrames('death', 4)
+  };
+}
+
+function loadAlienSprite(path) {
+  const image = new Image();
+  image.src = `sprites/aliens/${path}`;
+  return image;
+}
+
+function markZombieHit(z, animateDamage = true) {
+  z.isHit = true;
+  if (animateDamage && alienSprites[z.type]) {
+    z.damageAnimStart = performance.now();
+  }
+}
+
+function queueAlienDeath(z) {
+  if (alienSprites[z.type]) {
+    alienDeathEffects.push({ type: z.type, col: z.col, y: z.y, startedAt: performance.now() });
+  }
+}
+
+function getAlienFrame(z, timestamp) {
+  const sprites = alienSprites[z.type];
+  if (!sprites) return null;
+
+  const elapsed = timestamp - (z.damageAnimStart || 0);
+  if (z.damageAnimStart && elapsed < sprites.damage.length * ALIEN_DAMAGE_FRAME_MS) {
+    const frameIndex = Math.floor(elapsed / ALIEN_DAMAGE_FRAME_MS);
+    const frame = sprites.damage[frameIndex];
+    if (frame.complete && frame.naturalWidth > 0) return frame;
+  }
+
+  const walkIndex = Math.floor(timestamp / ALIEN_WALK_FRAME_MS + z.zId * 8) % sprites.walk.length;
+  const frame = sprites.walk[walkIndex];
+  return frame.complete && frame.naturalWidth > 0 ? frame : null;
+}
+
+function bulletCrossesAlien(bullet, alien) {
+  const bulletTop = Math.min(bullet.y, bullet.prevY);
+  const bulletBottom = Math.max(bullet.y, bullet.prevY);
+  const alienTop = Math.min(alien.y, alien.prevY ?? alien.y) - 0.4;
+  const alienBottom = Math.max(alien.y, alien.prevY ?? alien.y) + 0.4;
+  return bulletBottom >= alienTop && bulletTop <= alienBottom;
+}
 
 // Game mode: 'menu' | 'standard' | 'raid' | 'endless'
 let gameMode = 'menu';
@@ -294,14 +358,15 @@ function updateScrapBar() {
 }
 
 function updatePersistentBar() {
+  const resources = getAllResources();
   const mc = document.getElementById('sc-metal-core');
-  if (mc) mc.textContent = `⚙️ ${persistent.metalCore}`;
+  if (mc) mc.textContent = `⚙️ ${resources.metalCore}`;
   // Show raid class shard chip only in raid mode
   const shardChip = document.getElementById('sc-raid-shard');
   if (shardChip) {
     if (gameMode === 'raid' && raidClass) {
       const sh = CLASS_SHARDS[raidClass];
-      shardChip.textContent = `${sh.icon} ${persistent[sh.key]}`;
+      shardChip.textContent = `${sh.icon} ${resources[sh.key]}`;
       shardChip.style.display = 'inline-flex';
       shardChip.style.borderColor = sh.color;
       shardChip.style.color = sh.color;
@@ -506,6 +571,7 @@ function resetGame() {
   turretCol = 2;
   bullets = [];
   zombies = [];
+  alienDeathEffects = [];
   enemyBullets = [];
   kills = 0;
   waveKills = 0;
@@ -522,7 +588,10 @@ function resetGame() {
   combo = 0;
   comboTimer = 0;
 
-  spawnDelay = 4250;
+  spawnDelay = Math.max(
+    800,
+    Math.round(BASE_SPAWN_DELAY * Math.pow(SPAWN_DELAY_MULTIPLIER, Math.max(0, wave - 1)))
+  );
   nextSpawnTime = Date.now() + spawnDelay;
 
   paused = false;
@@ -651,19 +720,27 @@ function updateCombo() {
 //  CONTROLS & INPUT ACTIONS
 // ══════════════════════════════════════════════
 function move(dir) {
+  if (cancelExitCountdownForInput()) return;
   if (!running || paused) return;
   turretCol = Math.max(0, Math.min(COLS - 1, turretCol + dir));
 }
 
 function shoot() {
+  if (cancelExitCountdownForInput()) return;
   if (!running || coolingDown || burstLeft <= 0 || paused) return;
   sndShoot();
 
   // Apply recoil
   recoilAmt = 15;
 
-  let pierceV = bulletPierce;
-  const b = { col: turretCol, y: ROWS - 1, prevY: ROWS - 1, pierceLeft: pierceV };
+  const pierceV = Number.isFinite(bulletPierce) ? Math.max(0, Math.floor(bulletPierce)) : 0;
+  const b = {
+    col: turretCol,
+    y: ROWS - 1,
+    prevY: ROWS - 1,
+    hitsRemaining: pierceV + 1,
+    hitZombieIds: new Set()
+  };
   bullets.push(b);
   burstLeft--;
   shotCounter++;
@@ -679,6 +756,7 @@ function shoot() {
 }
 
 function reload() {
+  if (cancelExitCountdownForInput()) return;
   if (!running || coolingDown || burstLeft === getMaxBurst() || paused) return;
   burstLeft = 0;
   coolingDown = true;
@@ -729,7 +807,7 @@ function triggerGigaBeam() {
   zombies.forEach(z => {
     if (z.y > -1) {
       z.hp -= 20;
-      z.isHit = true;
+      markZombieHit(z);
       dmgTxt(z.col, z.y, 20, '#00e5ff');
       explode(z.col, z.y, 'tech', 20);
     }
@@ -762,6 +840,7 @@ function updateUtilityHUD() {
 }
 
 function toggleUtility() {
+  if (cancelExitCountdownForInput()) return;
   const order = ['barricade', 'sentry', 'mine'];
   const idx = order.indexOf(activeUtility);
   activeUtility = order[(idx + 1) % order.length];
@@ -770,6 +849,7 @@ function toggleUtility() {
 }
 
 function deployActiveUtility() {
+  if (cancelExitCountdownForInput()) return;
   if (!running || paused || over || gameMode === 'menu') return;
   const count = utilityInventory[activeUtility] || 0;
   if (count <= 0) {
@@ -909,42 +989,28 @@ function canAffordScrap(cost) {
 }
 
 function spendScrap(cost) {
+  const resources = getAllResources();
+  const canAfford = Object.entries(cost).every(([key, amount]) =>
+    Number.isFinite(amount) && amount >= 0 && resources[key] >= amount
+  );
+  if (!canAfford) {
+    showDropToast("Not enough resources.");
+    return false;
+  }
+
   Object.entries(cost).forEach(([k, v]) => {
-    if (k === 'iron' || k === 'steel' || k === 'titan') {
-      persistent[k] = (persistent[k] || 0) - v;
-      scrap[k] = persistent[k];
-    } else if (persistent.hasOwnProperty(k)) {
-      persistent[k] = (persistent[k] || 0) - v;
-    }
+    resources[k] -= v;
   });
+  scrap.iron = resources.iron;
+  scrap.steel = resources.steel;
+  scrap.titan = resources.titan;
   updateScrapBar();
-  saveProgress();
+  if (!running) saveProgress();
+  return true;
 }
 
 function getAllResources() {
-  if (running) {
-    return {
-      iron: runGathered.iron, steel: runGathered.steel, titan: runGathered.titan,
-      metalCore: runGathered.metalCore,
-      fireShard: runGathered.fireShard, stormShard: runGathered.stormShard,
-      cryoShard: runGathered.cryoShard, voidShard: runGathered.voidShard,
-      fireCore: runGathered.fireCore, stormCore: runGathered.stormCore,
-      cryoCore: runGathered.cryoCore, voidCore: runGathered.voidCore,
-      fireCoreBroken: runGathered.fireCoreBroken, stormCoreBroken: runGathered.stormCoreBroken,
-      cryoCoreBroken: runGathered.cryoCoreBroken, voidCoreBroken: runGathered.voidCoreBroken
-    };
-  } else {
-    return {
-      iron: persistent.iron, steel: persistent.steel, titan: persistent.titan,
-      metalCore: persistent.metalCore,
-      fireShard: persistent.fireShard, stormShard: persistent.stormShard,
-      cryoShard: persistent.cryoShard, voidShard: persistent.voidShard,
-      fireCore: persistent.fireCore, stormCore: persistent.stormCore,
-      cryoCore: persistent.cryoCore, voidCore: persistent.voidCore,
-      fireCoreBroken: persistent.fireCoreBroken, stormCoreBroken: persistent.stormCoreBroken,
-      cryoCoreBroken: persistent.cryoCoreBroken, voidCoreBroken: persistent.voidCoreBroken
-    };
-  }
+  return running ? runGathered : persistent;
 }
 
 // ══════════════════════════════════════════════
@@ -963,12 +1029,22 @@ function spawnZ() {
   const eff = (wave >= 6 && wave <= 15) ? spawnDelay * 0.72 : spawnDelay;
   let z = { type: "basic", hp: 1, maxHp: 1, speed: 0.04, isHit: false };
   const r = Math.random();
+  const waveLevel = Math.max(0, wave - 1);
+  const fastChance = (kills >= 15 || wave >= 3)
+    ? Math.min(0.32, 0.12 + Math.floor(waveLevel / 3) * 0.025)
+    : 0;
+  const armoredChance = (kills >= 40 || wave >= 6)
+    ? Math.min(0.24, 0.05 + Math.floor(waveLevel / 4) * 0.02)
+    : 0;
+  const heavyChance = (kills >= 80 || wave >= 10)
+    ? Math.min(0.16, 0.02 + Math.floor(waveLevel / 5) * 0.015)
+    : 0;
 
-  if (kills >= 80 && r < 0.04) {
+  if (r < heavyChance) {
     z = { type: "heavy", hp: Math.max(8, wave * 2), speed: 0.02 };
-  } else if (kills >= 40 && r < 0.10) {
+  } else if (r < heavyChance + armoredChance) {
     z = { type: "armored", hp: Math.max(4, wave), speed: 0.04 };
-  } else if (kills >= 15 && r < 0.15) {
+  } else if (r < heavyChance + armoredChance + fastChance) {
     z = { type: "fast", hp: 1, speed: 0.08 };
   }
 
@@ -978,6 +1054,11 @@ function spawnZ() {
     const endlessSpeedMult = Math.min(2.5, 1 + (wave - 1) * 0.04);
     z.hp = Math.round(z.hp * endlessMult);
     z.speed = z.speed * endlessSpeedMult;
+  } else {
+    const hpMultiplier = 1 + Math.min(2, waveLevel * 0.06);
+    const speedMultiplier = 1 + Math.min(0.45, waveLevel * 0.015);
+    z.hp = Math.max(1, Math.round(z.hp * hpMultiplier));
+    z.speed *= speedMultiplier;
   }
 
   z.maxHp = z.hp;
@@ -1005,22 +1086,29 @@ function spawnRaidZ() {
   const eff = (wave >= 6 && wave <= 15) ? spawnDelay * 0.72 : spawnDelay;
 
   // Weighted random pick of zombie definition
-  const totalWeight = zone.zombies.reduce((s, zd) => s + zd.dropWeight, 0);
+  const minHp = Math.min(...zone.zombies.map(zd => zd.hp));
+  const tierBias = Math.min(0.8, Math.max(0, wave - 1) * 0.04);
+  const weightedZombies = zone.zombies.map(zd => ({
+    definition: zd,
+    weight: zd.dropWeight * Math.pow(zd.hp / minHp, tierBias)
+  }));
+  const totalWeight = weightedZombies.reduce((s, entry) => s + entry.weight, 0);
   let rand = Math.random() * totalWeight;
-  let def = zone.zombies[0];
-  for (const zd of zone.zombies) {
-    rand -= zd.dropWeight;
-    if (rand <= 0) { def = zd; break; }
+  let def = weightedZombies[0].definition;
+  for (const entry of weightedZombies) {
+    rand -= entry.weight;
+    if (rand <= 0) { def = entry.definition; break; }
   }
 
   // Scale hp with wave progression
   const hp = Math.max(1, Math.round(def.hp * (1 + wave * 0.12)));
+  const speed = def.speed * (1 + Math.min(0.45, Math.max(0, wave - 1) * 0.015));
   const z = {
     type: def.type,
     label: def.label,
     hp, maxHp: hp,
-    speed: def.speed,
-    baseSpeed: def.speed,
+    speed,
+    baseSpeed: speed,
     raidColor: def.color,
     raidGlow: def.glow,
     raidRadius: def.radius,
@@ -1112,7 +1200,10 @@ function advWave() {
   wave++;
   waveKills = 0;
   document.getElementById("waveBarFill").style.width = "0%";
-  spawnDelay = Math.max(800, spawnDelay - 220);
+  spawnDelay = Math.max(
+    800,
+    Math.round(BASE_SPAWN_DELAY * Math.pow(SPAWN_DELAY_MULTIPLIER, wave - 1))
+  );
 
   sndWaveClear();
   doFlash("fg");
@@ -1157,7 +1248,7 @@ function applyClassHit(z, b) {
       zombies.forEach(t => {
         if (t !== z && t.col === b.col) {
           t.hp -= bulletDamage * 2;
-          t.isHit = true;
+          markZombieHit(t);
           dmgTxt(b.col, t.y, bulletDamage * 2, "#ff6d00");
         }
       });
@@ -1173,7 +1264,7 @@ function applyClassHit(z, b) {
       let dmgVal = Math.ceil(bulletDamage * 0.5);
       if (activeMutator === 'overcharge') dmgVal = Math.ceil(dmgVal * 0.5);
       t.hp -= dmgVal;
-      t.isHit = true;
+      markZombieHit(t);
       dmgTxt(t.col, t.y, dmgVal, "#aeea00");
       lightningZap(z.cols ? z.cols[1] : z.col, z.y, t.col, t.y);
     });
@@ -1231,7 +1322,7 @@ function applyClassKill(z) {
       zombies.forEach(t => {
         if (t.col === z.col) {
           t.hp -= 8;
-          t.isHit = true;
+          markZombieHit(t);
           dmgTxt(t.col, t.y, 8, "#ff6d00");
         }
       });
@@ -1245,7 +1336,7 @@ function applyClassKill(z) {
       zombies.forEach(t => {
         if (t.col === z.col) {
           t.hp -= 6;
-          t.isHit = true;
+          markZombieHit(t);
           dmgTxt(t.col, t.y, 6, "#80deea");
         }
       });
@@ -1265,7 +1356,7 @@ function applyClassKill(z) {
       zombies.forEach(t => {
         if (t !== z && Math.abs(t.col - pullCol) <= 1) {
           t.hp -= 10;
-          t.isHit = true;
+          markZombieHit(t);
           dmgTxt(t.col, t.y, 10, "#ce93d8");
         }
       });
@@ -1331,7 +1422,7 @@ function triggerInfernoCataclysm() {
         const check = z.cols ? z.cols.includes(col) : z.col === col;
         if (check) {
           z.hp -= 15;
-          z.isHit = true;
+          markZombieHit(z);
           dmgTxt(col, z.y, 15, "#ff3300");
         }
       });
@@ -1350,7 +1441,7 @@ function triggerStormOverload() {
     setTimeout(() => {
       if (!running || paused || z.hp <= 0) return;
       z.hp -= 12;
-      z.isHit = true;
+      markZombieHit(z);
       z.status = 'frozen';
       z.statusTimer = 2000;
       dmgTxt(z.col, z.y, 12, "#aeea00");
@@ -1373,7 +1464,7 @@ function triggerGlacierCollapse() {
     if (z.y > 0) {
       if (z.status === 'frozen') {
         z.hp -= 20;
-        z.isHit = true;
+        markZombieHit(z);
         dmgTxt(z.col, z.y, 20, "#80deea");
         iceRing(z.col, z.y);
         explode(z.col, z.y, 'ice', 20);
@@ -1401,6 +1492,7 @@ function triggerSingularityRift() {
 // ══════════════════════════════════════════════
 function update() {
   if (paused) return;
+  zombies.forEach(z => { z.prevY = z.y; });
 
   // Exit timer countdown logic
   if (exitTimerActive) {
@@ -1508,6 +1600,7 @@ function update() {
       const fx = getClassFx(activeClass);
       if (activeClass === 'tech' && targetDeployable.type === 'barricade' && fx.teslaSpikes) {
         z.hp -= 1.5 * (LOOP / 1000);
+        markZombieHit(z, false);
         if (Math.random() < 0.15) {
           lightningZap(targetDeployable.col, targetDeployable.row, z.col, z.y);
           dmgTxt(z.col, z.y, 1, '#00e5ff');
@@ -1640,6 +1733,7 @@ function update() {
       if (z.col === pool.col && Math.abs(z.y - pool.row) < 1) {
         if (Math.random() < 0.1) {
           z.hp -= 1;
+          markZombieHit(z, false);
           dmgTxt(pool.col, pool.row, 1, "#ff6d00");
         }
       }
@@ -1655,7 +1749,7 @@ function update() {
     zombies.forEach(z => {
       if (!ball.hits.includes(z.zId) && Math.abs(z.col - ball.x) < 1 && Math.abs(z.y - ball.y) < 1.5) {
         z.hp -= 5;
-        z.isHit = true;
+        markZombieHit(z);
         ball.hits.push(z.zId);
         dmgTxt(z.col, z.y, 5, "#aeea00");
         lightningZap(Math.round(ball.x), ball.y, z.col, z.y);
@@ -1678,13 +1772,14 @@ function update() {
   zombies.forEach(z => {
     if (z.status === 'fire' && Math.random() < 0.05) {
       z.hp -= 1;
+      markZombieHit(z, false);
       dmgTxt(z.col, z.y, 1, "#ff6d00");
     }
   });
 
   // Black hole damage ticks
   if (classPowerState.blackHoleActive) {
-    if (Math.random() < 0.3) zombies.forEach(z => { z.hp -= 3; z.isHit = true; });
+    if (Math.random() < 0.3) zombies.forEach(z => { z.hp -= 3; markZombieHit(z, false); });
     classPowerState.blackHoleTimer -= LOOP;
     if (classPowerState.blackHoleTimer <= 0) classPowerState.blackHoleActive = false;
   }
@@ -1704,7 +1799,7 @@ function update() {
           }
           if (Math.abs(z.y - 4) < 2 && Math.random() < 0.35) {
             z.hp -= 2;
-            z.isHit = true;
+            markZombieHit(z, false);
             dmgTxt(z.col, z.y, 2, "#ce93d8");
           }
         }
@@ -1721,7 +1816,7 @@ function update() {
   // Blizzard damage ticks
   if (classPowerState.blizzardActive) {
     classPowerState.blizzardTimer -= LOOP;
-    if (Math.random() < 0.04) zombies.forEach(z => { z.hp -= 1; });
+    if (Math.random() < 0.04) zombies.forEach(z => { z.hp -= 1; markZombieHit(z, false); });
     if (classPowerState.blizzardTimer <= 0) classPowerState.blizzardActive = false;
   }
 
@@ -1735,16 +1830,23 @@ function update() {
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     for (let j = zombies.length - 1; j >= 0; j--) {
+      if (b.hitsRemaining <= 0) {
+        bullets.splice(i, 1);
+        break;
+      }
+
       const z = zombies[j];
       const hc = z.cols ? z.cols.includes(b.col) : b.col === z.col;
-      if (hc && b.y <= z.y + 0.6 && b.prevY >= z.y) {
+      if (hc && !b.hitZombieIds.has(z.zId) && bulletCrossesAlien(b, z)) {
+        b.hitsRemaining--;
+        b.hitZombieIds.add(z.zId);
         sndHit();
         const isNapalm = activeClass === 'fire' && getClassFx('fire').napalm && classPowerState.napalmCounter > 0 && (shotCounter % 5 === 0);
         let dmg = isNapalm ? bulletDamage * 3 : bulletDamage;
         if (activeMutator === 'overcharge') dmg = Math.max(1, Math.floor(dmg * 0.5));
 
         z.hp -= dmg;
-        z.isHit = true;
+        markZombieHit(z);
         let kb = knockback;
         if (activeMutator === 'warp') kb *= 2.5;
         if (kb > 0) z.y = Math.max(0, z.y - kb);
@@ -1807,12 +1909,11 @@ function update() {
             }
           }
 
+          queueAlienDeath(z);
           zombies.splice(j, 1);
         }
 
-        if (b.pierceLeft > 0) {
-          b.pierceLeft--;
-        } else {
+        if (b.hitsRemaining <= 0) {
           bullets.splice(i, 1);
           break;
         }
@@ -1831,6 +1932,7 @@ function update() {
       dropScrap(z);
       const deb = activeClass || (z.type === 'armored' || z.type === 'heavy' || z.type === 'miniboss' || z.type === 'boss' ? 'metal' : 'flesh');
       explode(z.col, z.y, deb, 12);
+      queueAlienDeath(z);
       zombies.splice(j, 1);
     }
   }
@@ -1850,7 +1952,7 @@ function update() {
           const distCol = zCols.reduce((min, c) => Math.min(min, Math.abs(c - d.col)), 99);
           if (distCol <= 1 && Math.abs(z.y - d.row) <= 1.5) {
             z.hp -= 12;
-            z.isHit = true;
+            markZombieHit(z);
             dmgTxt(z.col, z.y, 12, '#ff6d00');
           }
         });
@@ -1886,7 +1988,7 @@ function update() {
           let pierce = isOverclocked ? 1 : 0;
           
           targetZ.hp -= sDmg;
-          targetZ.isHit = true;
+          markZombieHit(targetZ);
           dmgTxt(d.col, targetZ.y, sDmg, '#00e5ff');
           explode(d.col, targetZ.y, 'tech', 4);
           
@@ -1918,7 +2020,7 @@ function update() {
 
             if (nextZ) {
               nextZ.hp -= sDmg;
-              nextZ.isHit = true;
+              markZombieHit(nextZ);
               dmgTxt(d.col, nextZ.y, sDmg, '#00e5ff');
               explode(d.col, nextZ.y, 'tech', 4);
               
@@ -1961,7 +2063,7 @@ function update() {
 
       if (targetZ) {
         targetZ.hp -= 1;
-        targetZ.isHit = true;
+        markZombieHit(targetZ);
         dmgTxt(targetZ.col, targetZ.y, 1, '#00e5ff');
         explode(targetZ.col, targetZ.y, 'tech', 4);
         playTone(900, 0.08, 0.08, 'sine');
@@ -2036,6 +2138,8 @@ function update() {
 //  CANVAS RENDERING ENGINE (60 FPS DRAW)
 // ══════════════════════════════════════════════
 function drawLoop(timestamp) {
+  requestAnimationFrame(drawLoop);
+
   // Update particles and visual effects at 60 FPS
   updateParticles();
   updateEffects();
@@ -2045,14 +2149,13 @@ function drawLoop(timestamp) {
 
   // Render scene
   if (running || over || paused) {
-    draw();
+    draw(timestamp);
   }
-
-  requestAnimationFrame(drawLoop);
 }
 
-function draw() {
+function draw(timestamp) {
   if (!ctx) return;
+  timestamp = timestamp || performance.now();
 
   // 1. Clear Screen
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -2625,20 +2728,30 @@ function draw() {
       ctx.shadowColor = colorGlow;
       ctx.shadowBlur = 6;
 
-      // Main Core
-      ctx.beginPath();
-      ctx.arc(baseX, baseY, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      const alienFrame = getAlienFrame(z, timestamp);
+      if (alienFrame) {
+        ctx.drawImage(
+          alienFrame,
+          baseX - ALIEN_RENDER_SIZE / 2,
+          baseY - ALIEN_RENDER_SIZE / 2,
+          ALIEN_RENDER_SIZE,
+          ALIEN_RENDER_SIZE
+        );
+      } else {
+        // Keep the existing vector rendering as a fallback and for enemy variants.
+        ctx.beginPath();
+        ctx.arc(baseX, baseY, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
 
-      // Eyes
-      ctx.fillStyle = "red";
-      ctx.shadowColor = "red";
-      ctx.shadowBlur = 4;
-      ctx.beginPath();
-      ctx.arc(baseX - 6, baseY - 6, 2.5, 0, Math.PI * 2);
-      ctx.arc(baseX + 6, baseY - 6, 2.5, 0, Math.PI * 2);
-      ctx.fill();
+        ctx.fillStyle = "red";
+        ctx.shadowColor = "red";
+        ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.arc(baseX - 6, baseY - 6, 2.5, 0, Math.PI * 2);
+        ctx.arc(baseX + 6, baseY - 6, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Health bars (above normal zombie heads)
       if (z.maxHp > 1) {
@@ -2688,6 +2801,29 @@ function draw() {
     z.isHit = false;
     ctx.restore();
   });
+
+  for (let i = alienDeathEffects.length - 1; i >= 0; i--) {
+    const effect = alienDeathEffects[i];
+    const elapsed = timestamp - effect.startedAt;
+    const deathFrames = alienSprites[effect.type].death;
+    const duration = deathFrames.length * ALIEN_DEATH_FRAME_MS;
+    if (elapsed >= duration) {
+      alienDeathEffects.splice(i, 1);
+      continue;
+    }
+
+    const frameIndex = Math.floor(elapsed / ALIEN_DEATH_FRAME_MS);
+    const frame = deathFrames[frameIndex];
+    if (frame.complete && frame.naturalWidth > 0) {
+      ctx.drawImage(
+        frame,
+        effect.col * 100 + (100 - ALIEN_RENDER_SIZE) / 2,
+        effect.y * 100 + (100 - ALIEN_RENDER_SIZE) / 2,
+        ALIEN_RENDER_SIZE,
+        ALIEN_RENDER_SIZE
+      );
+    }
+  }
 
   // 6. Draw Spawning flash animations
   activeEffects.forEach(fx => {
@@ -3218,7 +3354,7 @@ function refreshUtilitySection() {
     btn.disabled = isMax || !canAfford;
     btn.onclick = () => {
       sndBuy();
-      spendScrap(item.cost);
+      if (!spendScrap(item.cost)) return;
       utilityInventory[item.key] = (utilityInventory[item.key] || 0) + 1;
       updateUtilityHUD();
       refreshUtilitySection();
@@ -3271,9 +3407,10 @@ function refreshBasicUG() {
     btn.disabled = mx || !canAfford;
     btn.onclick = () => {
       sndBuy();
-      spendScrap(cost);
+      if (!spendScrap(cost)) return;
       u.apply(u.vals[u.lvl]);
       u.lvl++;
+      saveProgress();
       refreshBasicUG();
     };
     row.appendChild(btn);
@@ -3338,7 +3475,7 @@ function showClassPick() {
               persistent.activeClass = null;
               saveProgress();
             }
-            spendClassUnlock(key); // spends resources AND records in unlockedClasses
+            if (!spendClassUnlock(key)) return;
           } else {
             // Already unlocked — switching to it is free (cores already spent)
             if (activeClass && activeClass !== key) {
@@ -3406,7 +3543,7 @@ function showClassUpgrades() {
     if (!canBuy && !unlocked && !locked) btn.classList.add("no-afford");
     btn.onclick = () => {
       sndBuy();
-      spendScrap(u.cost);
+      if (!spendScrap(u.cost)) return;
       persistent.classLvls[activeClass]++;
       saveProgress();
       sndClassPower(activeClass);
@@ -3455,8 +3592,7 @@ function wipeSave() {
   try {
     localStorage.removeItem(SAVE_KEY);
     localStorage.removeItem(AUDIO_SETTINGS_KEY);
-  } catch (error) {
-    console.error("Unable to wipe saved game progress:", error);
+  } catch {
     showDropToast("Could not wipe save data.");
     return;
   }
@@ -3622,6 +3758,15 @@ document.addEventListener('keydown', e => {
   }
 });
 
+function cancelExitCountdownForInput() {
+  if (!exitTimerActive) return false;
+
+  exitTimerActive = false;
+  document.getElementById('exitCountdownIndicator').style.display = 'none';
+  showDropToast("Escape cancelled. Don't move or shoot during the countdown.");
+  return true;
+}
+
 // ══════════════════════════════════════════════
 //  MAIN MENU & MODE NAVIGATION
 // ══════════════════════════════════════════════
@@ -3732,7 +3877,7 @@ function showExitConfirmation() {
   const resetWave = Math.max(1, Math.floor((wave - 1) / 5) * 5 + 1);
   titleEl.textContent = "⚠️ EMERGENCY EXIT";
   titleEl.style.color = "#ff4444";
-  textEl.innerHTML = `You are on <strong>Wave ${wave}</strong>.<br><br>To exit, you must survive a <strong>3-second countdown</strong>.<br><br>If you survive, you keep <strong>50%</strong> of gathered resources, and wave progress resets to <strong>Wave ${resetWave}</strong>.`;
+  textEl.innerHTML = `You are on <strong>Wave ${wave}</strong>.<br><br>To exit, survive a <strong>3-second countdown</strong>. Moving, firing, reloading, or using a utility cancels it.<br><br>If you survive, you keep <strong>50%</strong> of gathered resources, and wave progress resets to <strong>Wave ${resetWave}</strong>.`;
   yesBtn.textContent = "START ESCAPE COUNTDOWN";
   yesBtn.style.background = "linear-gradient(135deg,#ff3300,#b30000)";
   yesBtn.style.borderColor = "#ff5533";
@@ -3894,14 +4039,15 @@ function canUnlockClass(key) {
 function spendClassUnlock(key) {
   const cls = CLASSES[key];
   if (cls.altReq && canAffordUpgrade(cls.altReq)) {
-    spendScrap(cls.altReq);
+    if (!spendScrap(cls.altReq)) return false;
   } else {
-    spendScrap(cls.req);
+    if (!spendScrap(cls.req)) return false;
   }
   // Record this class as officially unlocked
   if (!persistent.unlockedClasses.includes(key)) {
     persistent.unlockedClasses.push(key);
   }
+  return true;
 }
 
 function getResourceIcon(key) {
@@ -4003,7 +4149,7 @@ function refreshInventory() {
     btn.disabled = mx || !canAfford;
     btn.onclick = () => {
       sndBuy();
-      spendScrap(cost);
+      if (!spendScrap(cost)) return;
       
       // Update the level inside UG
       u.lvl++;
@@ -4027,6 +4173,7 @@ function refreshInventory() {
 //  PERSISTENCE (localStorage)
 // ══════════════════════════════════════════════
 function saveProgress() {
+  UG.forEach((upgrade, i) => { persistent.ugLvls[i] = upgrade.lvl; });
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(persistent));
   } catch (e) { /* ignore quota errors */ }

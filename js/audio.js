@@ -27,8 +27,8 @@ function loadAudioSettings() {
       musicVolume = settings.musicVolume;
     }
     if (!musicMuted && musicVolume === 0) musicVolume = 0.4;
-  } catch (error) {
-    console.error("Unable to load saved audio settings:", error);
+  } catch {
+    showAudioSettingsError("Unable to load saved audio settings.");
   }
 }
 
@@ -40,9 +40,21 @@ function saveAudioSettings() {
       musicMuted,
       musicVolume
     }));
-  } catch (error) {
-    console.error("Unable to save audio settings:", error);
+  } catch {
+    showAudioSettingsError("Unable to save audio settings.");
   }
+}
+
+function showAudioSettingsError(message) {
+  const toast = document.getElementById("dropToast");
+  if (!toast) {
+    window.alert(message);
+    return;
+  }
+
+  toast.textContent = message;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
 function resetAudioSettings() {
