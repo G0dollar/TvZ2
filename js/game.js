@@ -37,7 +37,6 @@ let cooldownPauseAcc = 0;
 
 const BASE_SPAWN_DELAY = 4250;
 const SPAWN_DELAY_MULTIPLIER = 0.96;
-const TEST_FORCE_ARMORED_SPAWN = true;
 let spawnDelay = BASE_SPAWN_DELAY;
 let nextSpawnTime = 0;
 const ALIEN_WALK_FRAME_MS = 125;
@@ -674,10 +673,6 @@ function resetGame() {
     spawningEnabled = true;
   }
 
-  if (TEST_FORCE_ARMORED_SPAWN && gameMode === 'standard' && spawningEnabled) {
-    spawnZ('armored');
-  }
-
   updateVignette();
   updateWaveBadge();
   updateScrapBar();
@@ -1022,7 +1017,7 @@ function getAllResources() {
 // ══════════════════════════════════════════════
 //  WAVE MANAGEMENT & SPAWNING
 // ══════════════════════════════════════════════
-function spawnZ(forcedType = null) {
+function spawnZ() {
   if (over || !spawningEnabled) return;
   if (zombies.some(z => z.type === "boss" || z.type === "miniboss")) return;
 
@@ -1046,9 +1041,7 @@ function spawnZ(forcedType = null) {
     ? Math.min(0.16, 0.02 + Math.floor(waveLevel / 5) * 0.015)
     : 0;
 
-  if (forcedType === 'armored') {
-    z = { type: "armored", hp: Math.max(4, wave), speed: 0.04 };
-  } else if (r < heavyChance) {
+  if (r < heavyChance) {
     z = { type: "heavy", hp: Math.max(8, wave * 2), speed: 0.02 };
   } else if (r < heavyChance + armoredChance) {
     z = { type: "armored", hp: Math.max(4, wave), speed: 0.04 };
